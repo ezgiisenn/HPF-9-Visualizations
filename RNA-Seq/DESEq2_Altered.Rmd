@@ -1,0 +1,268 @@
+---
+title: "Analysis of Emre's RNA sequencing data, ILSE 7113"
+author: "Birgitta, Lukas and Janina"
+date: "`r format(Sys.time(), '%d.%m.%Y')`"
+output:
+  html_document:
+  toc: true
+highlight: haddock
+editor_options: 
+  chunk_output_type: console
+---
+
+# Background
+Differential expression analysis and graphs for Emre's RNA sequencing data, ILSE 7113, comparing MCF7 wt vs LTED. 
+
+# Load libraries, set working directories and functions
+```{r message=FALSE, warning=FALSE}
+#' load libraries
+library(plyr)
+library(dplyr)
+library(data.table)
+library(biomaRt)
+library(DESeq2)
+library(apeglm) # required for LFC shrinkage
+library(RColorBrewer)
+library(ggplot2)
+library(amap)
+library(pheatmap)
+library(stringr)
+library(tidyr)
+library(openxlsx)
+
+base_dir <- "/Users/ezgisen/Documents/HPF9/deseq2-2"
+#script_dir <- file.path("C:/Users/michelsb/Nextcloud/Documents", "scripts" )
+#database_dir <- file.path("C:/Users/michelsb/Nextcloud/Documents", "database" )
+work_dir <- file.path(base_dir)
+read_dir <- file.path(base_dir, "readcounts")
+res_dir <- file.path(base_dir)
+
+if(!dir.exists(res_dir)){dir.create(res_dir,recursive = TRUE)}
+
+#' load functions
+source(file.path(script_dir, "fcts_large_dataframes.R"))
+```
+
+# DESeq2 analysis
+```{r}
+# prepare data for DESeq run in sample table
+sampleTable<- read.table(paste0(read_dir, "/", "samples_wt_vs_LTED.txt"),sep='\t', header= TRUE, stringsAsFactors = TRUE)
+sampleTable <- data.frame(sampleName = sampleTable$sampleName,
+                          fileName = sampleTable$fileName,
+                          condition = sampleTable$condition)
+sampleTable$condition <- factor(sampleTable$condition)
+sampleTable$condition <- relevel(sampleTable$condition, ref = "WT")  # change to reference level in your samples
+
+print(sampleTable)
+setwd(work_dir)
+
+# DESeq run, unpaired analyses
+ddsHTSeq <- DESeqDataSetFromHTSeqCount(sampleTable=sampleTable, directory = read_dir, design= ~ condition)
+
+# remove lowly expressed genes
+keep <- rowSums(counts(ddsHTSeq)) >= 15
+ddsHTSeq <- ddsHTSeq[keep,]
+
+dds <- DESeq(ddsHTSeq)
+
+resultsNames(dds)
+
+resLFC1 <- lfcShrink(dds, coef= "condition_LTED_vs_WT", type = "apeglm") # change according to comparisons from resultsNames(dds)
+#res_table <- make1col(as.data.frame(resLFC1))
+
+#add read count information
+counts <- as.data.frame(cbind(rownames(dds),counts(dds),resLFC1))
+colnames(counts)[1] <- "ids"
+```
+
+# Annotations 
+To get annotations with hgnc symbols, use one of the hts result txt files to get current Ensembl IDs as basis. Then use biomaRt to get the hgnc symbols.
+```{r}
+# format current annotations
+annot = read.table(file.path(read_dir, "AS-152253.txt"), header=FALSE, sep='\t')
+annot$ensembl_gene_id <- annot$V1
+annot <- separate(data = annot, col = V1, into = c("id", "CanGo"), sep = "\\.")
+annot<- annot[,c(1,4)]
+head(annot)
+
+# Perform biomaRt query to get hgnc symbols
+HumanAnnotations<- getBM(filters= "ensembl_gene_id",
+                         attributes= c("ensembl_gene_id",
+                                       "hgnc_symbol"),
+                         values=annot$id,
+                         mart= useDataset("hsapiens_gene_ensembl", useMart("ensembl")))
+names(HumanAnnotations)[1] <- "id"
+
+## join BiomaRt annotation and sample annotation
+Annotations <- join(annot, HumanAnnotations, type = "left")
+Annotations[duplicated(Annotations$ensembl_gene_id)|duplicated(Annotations$ensembl_gene_id, fromLast=TRUE),]
+Annotations <- Annotations[!duplicated(Annotations$ensembl_gene_id), ]
+head(Annotations)
+
+# add Annotations to results table
+names(Annotations) <- c("ensembl_gene_id", "ids", "hgnc_symbol")
+Annotations_HTSeq_counts<- join(Annotations, counts, type= "right", by = "ids")
+
+# define filename
+filename <- c("wt_vs_LTED") #change according to experiment
+
+write.xlsx(Annotations_HTSeq_counts,paste0(res_dir,"/", format(Sys.Date(), "%Y%m%d"),"_", filename,"_DESeq2.xlsx"), rowNames =FALSE, creator = "Birgitta", tabColour = "red", firstActiveRow = 2, firstActiveCol = 4, sheetName= "DESeq2", overwrite= TRUE)
+```
+
+# Overview graphs
+## MA graphs
+```{r}
+# pdf(file.path(res_dir, paste0(format(Sys.Date(), "%Y%m%d"), "_", filename,"_MA",".pdf")))
+pdf("MA_plot_blue.pdf",paper="USr")
+par(mai=c(1,1,1,0.5))
+plotMA(resLFC1,
+       main= "MCF7 vs MCF7-LTED",
+       colNonSig="gray65",
+       colSig= "royalblue",
+       ylab= expression(log[2]~"Fold Change"),
+       xlab = "Mean of Normalized Counts",
+       cex.lab = 1.5,
+       cex.axis=1,
+       # ylim=c(-2,2),
+       # xaxt="n",
+       # yaxt="n",
+       colLine=NULL)
+abline(h=0, col= "black")
+
+dev.off()
+```
+
+
+```{r}
+```
+
+
+## Variance stabilising Transformation
+```{r}
+vst = varianceStabilizingTransformation(dds, blind=TRUE) # blind=TRUE should be used for comparing samples in a manner unbiased by prior information on samples, for example to perform sample QA (quality assurance)
+
+# get the most variant genes
+rv = rowVars(assay(vst)) # estimate row variance
+sel = order(rv, decreasing = TRUE)[1:100]
+vst_var = vst[sel,]
+vst_var
+```
+
+# Gene Clustering
+```{r}
+# pdf(file.path(res_dir, paste0(format(Sys.Date(), "%Y%m%d"),"_",filename, "_GeneClustering", ".pdf")))
+pdf("vst_clustering.pdf",paper="USr")
+sampledist<- dist(t(assay(vst)))
+sampleDistMatrix <- as.matrix( sampledist )
+rownames(sampleDistMatrix) <- colnames(assay(vst)) 
+colnames(sampleDistMatrix) <- colnames(assay(vst)) 
+colnames(sampleDistMatrix)
+colors <- colorRampPalette( rev(brewer.pal(9, "PuBu")) )(255)
+
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampledist,
+         clustering_distance_cols=sampledist,
+         col=colors, main= "VST Clustering WT vs LTED")
+dev.off()
+```
+
+# Principal component analysis
+```{r}
+pcaRes <- prcomp(t(assay(vst_var)), center = TRUE, scale.= FALSE)
+summary(pcaRes)
+
+pcaData <-plotPCA(vst_var, intgroup = c("condition"), returnData=TRUE)
+pcaData
+head(attr(pcaData, "percentVar"))
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+library(ggfortify)
+# pdf(file.path(res_dir, paste0(format(Sys.Date(), "%Y%m%d"),"_", filename, "_PCA_2D", ".pdf")))
+pdf("pca_samples_new.pdf",paper="USr")
+pcaData <- data.frame(cbind(rownames(pcaData),pcaData))
+colnames(pcaData)[1] <- "sample_name"
+
+ggplot(pcaData, aes(PC1, PC2, color=condition,label=sample_name))+ #, shape= siRNA )) + 
+        geom_point(size=2) + geom_text_repel(mapping = aes(fontface="bold")) +
+        xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+        ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+        coord_fixed(ratio=1.5) +
+        ggtitle("PCA of Samples WT vs LTED")+
+        theme_bw() +
+        scale_color_manual(values = c("tan1","seagreen")) +
+        theme(legend.position="bottom", legend.box = "horizontal", legend.title =element_blank() 
+              ,plot.title = element_text(hjust=0.5,face = "bold")) 
+
+
+dev.off()
+par(mar=(c(10,10,5,5)))
+plot(pcaRes$x[,1], pcaRes$x[,2],pc=16,
+     col=rep(c("seagreen","tan1"),each=3),
+     ylab="PC2",xlab="PC1",main="PCA")
+
+legend(x= -20,y=-4 ,col= c("seagreen","tan1"),pch=16,
+     legend=c("LTED","WT"),bty="n")
+
+# autoplot(pcaRes, data= t(assay(vst_var)), label=TRUE) + theme_bw() 
+# dev.off()
+```
+```{r}
+#Scree Plot
+
+sd <- pcaRes$sdev
+scree <- (sd**2/sum(sd**2)) * 100
+scree <- as.data.frame(scree)
+names <- c("PC1","PC2","PC3","PC4","PC5","PC6")
+scree <- cbind(names,scree)
+colnames(scree)[2] <-"values"
+
+pdf("scree_plot.pdf",paper="USr")
+par(mar=(c(10,5,5,5)))
+ggplot(scree,aes(x= names,y=values)) + geom_bar(stat="identity",fill="steelblue")+ theme_bw() + theme(aspect.ratio = 2/1.5) +xlab("")+ylab("(%)")
+dev.off()
+
+"```
+
+## Heatmap 
+```{r}
+anno = data.frame('condition' = c("WT", "WT", "WT", "LTED", "LTED", "LTED"))
+                  # 'siRNA' = (gsub("^([A-z]{6}\\d?)_{1}[a-z]*[A-z]{4}\\d{1}$", "\\1", colnames(assay(vst_var)))))
+
+rownames(anno) = colnames(assay(vst_var))
+
+# speficy nicer annotation colors using parameter annotation_colors
+ann_colors = list(condition = c(WT = "royalblue", LTED = "salmon"))
+pdf("cluster_vst_samples.pdf",paper="USr")
+pheatmap(assay(vst_var),
+         clustering_distance_cols = 'euclidean',
+         clustering_distance_rows = 'euclidean',
+         clustering_method = 'ward.D2',
+         annotation_col = anno,
+         annotation_colors = ann_colors,
+         show_rownames = FALSE,
+         show_colnames = FALSE,
+         annotation_legend=FALSE,
+         cutree_cols = 2, border_color = NA)
+         #main = "Euclidean dist, average linkage, Top 100 variant genes")
+dev.off()
+# filename = paste0(res_dir,"/", format(Sys.Date(), "%Y%m%d"),"_",filename, "_Heatmap", ".pdf")
+# dev.off()
+```
+
+# Session info
+```{r}
+sessionInfo()
+```
+
+# Citations
+```{r}
+citation()
+citation("biomaRt")
+citation("DESeq2")
+citation("apeglm")
+citation("plyr")
+citation("dplyr")
+citation("RColorBrewer")
+citation("pheatmap")
+```
+
