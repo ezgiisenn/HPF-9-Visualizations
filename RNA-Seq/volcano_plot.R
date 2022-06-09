@@ -47,15 +47,7 @@ top_genes <- rbind(head,tail)
 
 squash_axis <- function(from, to, factor) { 
   # A transformation function that squashes the range of [from, to] by factor on a given axis 
-  
-  # Args:
-  #   from: left end of the axis
-  #   to: right end of the axis
-  #   factor: the compression factor of the range [from, to]
-  #
-  # Returns:
-  #   A transformation called "squash_axis", which is capsulated by trans_new() function
-  
+ 
   trans <- function(x) { 
     
     # get indices for the relevant regions
@@ -86,18 +78,6 @@ squash_axis <- function(from, to, factor) {
   return(trans_new("squash_axis", trans, inv))
 }
 
-"""
-top_genes dataframe can be custom-wise created via filterinig of genes. 
-Examples like:
-
-top_genes <- data.frame()
-top_genes <-rbind(top_genes,volcano[volcano$gene_name == c('GLAYTL1'),])
-top_genes <-rbind(top_genes,volcano[volcano$gene_name == c('ESR''),])
-top_genes <-rbind(top_genes,volcano[volcano$gene_name == c('AKT1'),])
-top_genes <-rbind(top_genes,volcano[volcano$gene_name == c('EGFR''),])
-top_genes <-rbind(top_genes,volcano[volcano$gene_name == c('TP53'),])
-colnames(top_genes)[1] <- 'gene_name'
-"""
 
 pdf("volcano_plot_squashed.pdf",paper="USr")
 p <- ggplot(volcano,aes(x=log2fc,y=-log10(pvalue))) + geom_point(aes(colour = regulation)) 
