@@ -1,0 +1,23 @@
+producer_class	xtools.gsea.GseaPreranked
+producer_timestamp	1651581355377
+param	rpt_label	Hallmarks_LTEd_vs_wt
+param	rnd_seed	timestamp
+param	set_min	15
+param	zip_report	false
+param	create_svgs	false
+param	scoring_scheme	weighted
+param	rnk	/Users/ezgisen/Downloads/Test%20LTED%20wt.rnk
+param	norm	meandiv
+param	out	/Users/ezgisen/Downloads
+param	mode	Abs_max_of_probes
+param	include_only_symbols	true
+param	help	false
+param	set_max	500
+param	gmx	ftp.broadinstitute.org://pub/gsea/gene_sets/h.all.v7.5.1.symbols.gmt
+param	make_sets	true
+param	plot_top_x	20
+param	gui	false
+param	nperm	1000
+param	collapse	No_Collapse
+
+file	/Users/ezgisen/Downloads/Hallmarks_LTEd_vs_wt.GseaPreranked.1651581355377/index.html
